@@ -1,6 +1,6 @@
 model:
-  model_name: 'openai/whisper-medium'
-  model_size: 'medium'
+  model_name: 'openai/whisper-large-v3'
+  model_size: 'large'
 
 data:
   train_ds_dir: '/ceph/dpandya/notsofar/nsfd_adap_segments/train_set_features'

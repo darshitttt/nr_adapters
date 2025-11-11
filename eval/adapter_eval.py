@@ -4,16 +4,13 @@ import pandas as pd
 import numpy as np
 import datasets
 import adapters
-from transformers import AutomaticSpeechRecognitionPipeline
+from transformers import AutomaticSpeechRecognitionPipeline, WhisperForConditionalGeneration
 from transformers.pipelines.pt_utils import KeyDataset
 from tqdm import tqdm
 import torch # Import torch to check for CUDA availability
 
 # Setting config file
 config_path = 'eval_config.yaml'
-# Assuming this script is run with CUDA_VISIBLE_DEVICES="1",
-# the GPU index visible to the script will be 0.
-# If no specific GPU is needed, just remove the line, but it's good practice.
 #os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(["0"]) 
 
 def main():
@@ -39,7 +36,7 @@ def main():
     # Add adapter
     adap_dir = config["adapter"]["dir"]
     # Get a list of full adapter paths
-    adapter_paths = [os.path.join(adap_dir, x) for x in os.listdir(adap_dir) if "seq" in x if os.path.isdir(os.path.join(adap_dir, x))]
+    adapter_paths = [os.path.join(adap_dir, x) for x in os.listdir(adap_dir) if "seq" in x if "20E" in x if os.path.isdir(os.path.join(adap_dir, x))]
     print(f"Found adapters: {adapter_paths}")
     
     
@@ -47,49 +44,43 @@ def main():
     OPTIMAL_BATCH_SIZE = 1 
 
     for adap_path in adapter_paths:
+        # We change the model init here based on the experiments we did in scrap.ipynb
+        whisper_model = WhisperForConditionalGeneration.from_pretrained(
+            model_name,
+        )
 
-        whisper_model = adapters.WhisperAdapterModel.from_pretrained(
-        model_name,
-        language="english",
-        task="transcribe"
-    )
         whisper_model.config.max_length=512
         whisper_model.config.use_cache=False
+
+        # Init whisper model for adapters
+        adapters.init(whisper_model)        
         
         # Load and activate the adapter
-        adapter_name = whisper_model.load_adapter(adap_path, set_active=True)
-        # The line below is redundant after set_active=True in load_adapter, but harmless
-        whisper_model.set_active_adapters(adapter_name) 
+        adapter_name = whisper_model.load_adapter(adap_path)
+        whisper_model.set_active_adapters(adapter_name)
         
         print(f"\n--- Starting Evaluation for Adapter: **{adapter_name}** ---")
         # Initialize the base pipeline outside the loop
         eval_pipeline = AutomaticSpeechRecognitionPipeline(
             model=whisper_model,
-            feature_extractor=feature_extractor,
-            tokenizer=tokenizer,
+            feature_extractor=processor.feature_extractor,
+            tokenizer=processor.tokenizer,
             device="cuda:0", # Use GPU 0, or -1 for CPU
             chunk_length_s=30
         )
-        decoder_prompt_list = processor.get_decoder_prompt_ids(language="english", task="transcribe")
-        decoder_input_ids = torch.tensor(decoder_prompt_list, device="cuda:0")
+        forced_decoder_ids = processor.get_decoder_prompt_ids(language="english", task="transcribe")
 
         predictions = []
         # Use KeyDataset with tqdm for correct progress tracking
-        #dataset_for_pipeline = KeyDataset(eval_ds, 'audio')
         
         for prediction in tqdm(
             eval_pipeline(
                 KeyDataset(eval_ds, 'audio'),
                 batch_size=OPTIMAL_BATCH_SIZE, # Increased batch size for speed
-                generate_kwargs={
-                     "decoder_input_ids": decoder_input_ids,
-                     "forced_decoder_ids": None
-                },
+                generate_kwargs={"forced_decoder_ids": forced_decoder_ids},
                 max_new_tokens=256
             ), total=len(eval_ds), desc=f'Evaluating {adapter_name}'
         ):
-            # The pipeline returns a list of predictions when given KeyDataset
-            # and batch_size > 1. Extend the list with the batch results.
                 predictions.append(prediction)
 
         # Check for matching lengths (optional safety check)
@@ -123,4 +114,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-        

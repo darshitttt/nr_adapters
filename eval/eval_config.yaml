@@ -1,9 +1,9 @@
 model:
-  model_name: "openai/whisper-medium"
-  model_size: "medium"
+  model_name: "openai/whisper-large-v3"
+  model_size: "large"
 
 data:
   eval_csv: "/ceph/dpandya/notsofar/nsfd_adap_segments/eval_segments.csv"
 
 adapter:
-  dir: "/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base/medium/"
+  dir: "/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base/large/new_experiments_lowEpochs/"

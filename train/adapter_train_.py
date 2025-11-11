@@ -5,11 +5,9 @@ import datasets
 from transformers import TrainingArguments
 from adapters import AdapterTrainer, Seq2SeqAdapterTrainer
 from transformers import WhisperFeatureExtractor, WhisperTokenizer, WhisperProcessor
-from transformers import WhisperForConditionalGeneration
 import utils as tu # Assuming this utility file contains necessary components
 import json
 from dataclasses import asdict
-import json
 
 # --- Configuration Constants (Will be loaded from YAML) ---
 CONFIG_FILE = 'train_config.yaml'
@@ -23,7 +21,7 @@ def main():
     model_size = config['model']['model_size']
     train_ds_dir = config['data']['train_ds_dir']
     #rfs_to_train = config['experiment']['reduction_factors']
-    rfs_to_train = [4]
+    rfs_to_train = [4,8,16,32]
     adapter_base_dir = config['data']['adapter_base_dir']
     
     # Environment Setup
@@ -55,29 +53,21 @@ def main():
     # --- Training Loop over Reduction Factors (RFs) ---
     for rf in rfs_to_train:
         print(f"\n--- Starting Training for reduction_factor (RF) = {rf} ---")
-        adapter_name = f'seqBN_r{rf}_20E_simple'
+        adapter_name = f'seqBN_r{rf}_20e'
         
         # 1. Initialize a clean model for this RF run
         # Note: Must initialize a fresh model to avoid adapter contamination
-        '''whisper_model = adapters.WhisperAdapterModel.from_pretrained(
+        whisper_model = adapters.WhisperAdapterModel.from_pretrained(
             model_name, 
             language='english', 
             task='transcribe'
-        )'''
-        # Due to unfavorable results, we are going to init the Whisper model differently
-        whisper_model = WhisperForConditionalGeneration.from_pretrained(model_name)
-        adapters.init(whisper_model)
-
+        )
         whisper_model.config.max_length = 512
         whisper_model.config.use_cache = False
         whisper_model.freeze_encoder()
         
         # 2. Define Adapter Configuration (Instantiate with current RF)
-        adapter_config_instance = adapters.SeqBnConfig(mh_adapter=False, 
-                                                       output_adapter=True, 
-                                                       reduction_factor=rf,)
-                                                       #adapter_residual_before_ln=True,
-                                                       #dropout=0.1)
+        adapter_config_instance = adapters.SeqBnConfig(mh_adapter=False, output_adapter=True, reduction_factor=rf)
         
         # 3. Add the Adapter (using the name and config instance)
         whisper_model.add_adapter(adapter_name=adapter_name, config=adapter_config_instance)
@@ -86,7 +76,7 @@ def main():
         whisper_model.set_active_adapters(adapter_name)
 
         # 5. Define Training Arguments (Update output directory)
-        current_save_dir = os.path.join(adapter_base_dir, model_size, 'new_experiments_lowEpochs', adapter_name)
+        current_save_dir = os.path.join(adapter_base_dir, model_size, adapter_name)
         if not os.path.exists(current_save_dir):
             os.makedirs(current_save_dir)
         print(f'Trained Adapter will be saved at {current_save_dir}')
@@ -100,22 +90,15 @@ def main():
             per_device_train_batch_size=4,
             gradient_accumulation_steps=2,
             learning_rate=5e-4,
-            #warmup_steps=50,
-            num_train_epochs=10,
+            warmup_steps=50,
+            num_train_epochs=20,
             fp16=True,
-            max_grad_norm=1.0,
-            warmup_ratio=0.1,
             logging_steps=50,
             #save_steps=training_args_config['save_steps'], # Added save_steps for checkpoints
             #evaluation_strategy="epoch", # CRITICAL: Enables evaluation on eval_dataset
             remove_unused_columns=False,
             label_names=["labels"],
         )
-
-        # Saving Training args
-        json_file = os.path.join(current_save_dir, 'training_args.json')
-        with open(json_file, 'w') as f:
-            f.write(training_args.to_json_string())
         
         # 6. Initialize Trainer
         trainer = AdapterTrainer(
@@ -152,7 +135,7 @@ def main():
         print(f'Adapter "{adapter_name}" saved to {current_save_dir}')
 
     # --- Final Analysis (Saving All Results) ---
-    results_path = os.path.join(adapter_base_dir, model_size, f'{adapter_name}_experiment_results.json')
+    results_path = os.path.join(adapter_base_dir, model_size, 'experiment_results.json')
     # Use JSON to store results for easy analysis later
     with open(results_path, 'w') as f:
         # Convert dataclasses/other complex objects to serializable dicts
