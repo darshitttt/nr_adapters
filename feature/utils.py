@@ -17,4 +17,4 @@ def clean_text(s):
     return s
 
 def add_audio_dir(s):
-    return os.path.join('/ceph/dpandya/notsofar/nsfd_adap_segments/train/', s)
+    return os.path.join('/ceph/dpandya/notsofar/nsfd_adap_segments/new_train/', s)

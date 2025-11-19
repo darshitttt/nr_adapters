@@ -4,4 +4,5 @@ model:
 
 data:
   train_ds_dir: '/ceph/dpandya/notsofar/nsfd_adap_segments/train_set_features'
+  new_train_dir: '/ceph/dpandya/notsofar/train_set_features/'
   adapter_base_dir: '/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base'

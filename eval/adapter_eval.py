@@ -22,6 +22,7 @@ def main():
     
     # Setting up eval features
     eval_df = pd.read_csv(config['data']['eval_csv']).sample(540, random_state=42)
+    #eval_df = pd.read_csv(config['data']['eval_csv'])
     eval_df['transcription'] = eval_df['segmented_text'].apply(eu.clean_text)
     eval_df['segmented_audio_file'] = eval_df['segmented_audio_file'].apply(eu.add_audio_dir)
 
@@ -36,7 +37,8 @@ def main():
     # Add adapter
     adap_dir = config["adapter"]["dir"]
     # Get a list of full adapter paths
-    adapter_paths = [os.path.join(adap_dir, x) for x in os.listdir(adap_dir) if "seq" in x if "20E" in x if os.path.isdir(os.path.join(adap_dir, x))]
+    #adapter_paths = [os.path.join(adap_dir, x) for x in os.listdir(adap_dir) if "par" in x if "0e" in x if os.path.isdir(os.path.join(adap_dir, x))]
+    adapter_paths = ['/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base/large/full_ds/parBN_r4full_ds_5e/']
     print(f"Found adapters: {adapter_paths}")
     
     
@@ -76,9 +78,9 @@ def main():
         for prediction in tqdm(
             eval_pipeline(
                 KeyDataset(eval_ds, 'audio'),
-                batch_size=OPTIMAL_BATCH_SIZE, # Increased batch size for speed
-                generate_kwargs={"forced_decoder_ids": forced_decoder_ids},
-                max_new_tokens=256
+                #batch_size=OPTIMAL_BATCH_SIZE, # Increased batch size for speed
+                generate_kwargs={"forced_decoder_ids": forced_decoder_ids,
+                                 "temperature": 0.0,},
             ), total=len(eval_ds), desc=f'Evaluating {adapter_name}'
         ):
                 predictions.append(prediction)
@@ -96,7 +98,7 @@ def main():
         eval_df[col_name] = eval_df[col_name].apply(eu.clean_text)
 
         # Calculating WER
-        output_file = os.path.join(adap_dir, f'eval_{adapter_name}.csv')
+        output_file = os.path.join(adap_dir, f'eval_{adapter_name}_.csv')
         
         # Use eu.compute_wer to calculate Word Error Rate
         eval_df['wer'] = eval_df.apply(lambda x: eu.compute_wer(x[col_name], x['transcription']), axis=1)

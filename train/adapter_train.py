@@ -10,6 +10,10 @@ import utils as tu # Assuming this utility file contains necessary components
 import json
 from dataclasses import asdict
 import json
+import evaluate
+import numpy as np
+
+wer_metric = evaluate.load("wer")
 
 # --- Configuration Constants (Will be loaded from YAML) ---
 CONFIG_FILE = 'train_config.yaml'
@@ -27,12 +31,39 @@ def main():
     adapter_base_dir = config['data']['adapter_base_dir']
     
     # Environment Setup
-    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(["0"])
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(["1"])
 
     # --- Model and Processor Initialization (Done once) ---
     print("Initializing Whisper Components...")
     feature_extractor, tokenizer, processor = tu.get_training_components(model_name)
     data_collator = tu.DataCollatorSpeechSeq2SeqWithPadding(processor)
+    def compute_metrics_(pred):
+        preds = pred.predictions
+        labels = pred.label_ids
+
+        # 1. Handle tuple output
+        if isinstance(preds, tuple):
+            preds = preds[0]
+
+        # 2. Convert to numpy if it's a tensor
+        if hasattr(preds, "numpy"):
+            preds = preds.numpy()
+        if hasattr(labels, "numpy"):
+            labels = labels.numpy()
+
+        if preds.ndim == 3:
+            preds = np.argmax(preds, axis=-1)
+
+        preds = np.where(preds == -100, tokenizer.pad_token_id, preds)
+        labels = np.where(labels == -100, tokenizer.pad_token_id, labels)
+
+        # Decode
+        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
+        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+
+        # Compute WER
+        wer = wer_metric.compute(predictions=decoded_preds, references=decoded_labels)
+        return {"wer": wer}
     
     # --- Dataset Loading and Splitting ---
     print(f'Loading dataset from: {train_ds_dir}/{model_size}')
@@ -43,7 +74,7 @@ def main():
     full_ds = full_ds.filter(tu.filter_labels, input_columns=["labels"])
     
     # Split the dataset: 85% train, 15% validation
-    split_datasets = full_ds.train_test_split(test_size=0.05, seed=42)
+    split_datasets = full_ds.train_test_split(test_size=0.1, seed=42)
     train_ds = split_datasets['train']
     eval_ds = split_datasets['test']
     
@@ -55,29 +86,21 @@ def main():
     # --- Training Loop over Reduction Factors (RFs) ---
     for rf in rfs_to_train:
         print(f"\n--- Starting Training for reduction_factor (RF) = {rf} ---")
-        adapter_name = f'seqBN_r{rf}_20E_simple'
+        adapter_name = f'parBN_r{rf}full_ds_3e'
         
         # 1. Initialize a clean model for this RF run
-        # Note: Must initialize a fresh model to avoid adapter contamination
-        '''whisper_model = adapters.WhisperAdapterModel.from_pretrained(
-            model_name, 
-            language='english', 
-            task='transcribe'
-        )'''
         # Due to unfavorable results, we are going to init the Whisper model differently
         whisper_model = WhisperForConditionalGeneration.from_pretrained(model_name)
         adapters.init(whisper_model)
 
-        whisper_model.config.max_length = 512
-        whisper_model.config.use_cache = False
+        #whisper_model.config.max_length = 512
+        #whisper_model.config.use_cache = False
         whisper_model.freeze_encoder()
         
         # 2. Define Adapter Configuration (Instantiate with current RF)
-        adapter_config_instance = adapters.SeqBnConfig(mh_adapter=False, 
-                                                       output_adapter=True, 
-                                                       reduction_factor=rf,)
-                                                       #adapter_residual_before_ln=True,
-                                                       #dropout=0.1)
+        adapter_config_instance = adapters.ParBnConfig(reduction_factor=rf,
+                                                       #adapter_residual_before_ln=True,)
+                                                       dropout=0.1)
         
         # 3. Add the Adapter (using the name and config instance)
         whisper_model.add_adapter(adapter_name=adapter_name, config=adapter_config_instance)
@@ -86,7 +109,7 @@ def main():
         whisper_model.set_active_adapters(adapter_name)
 
         # 5. Define Training Arguments (Update output directory)
-        current_save_dir = os.path.join(adapter_base_dir, model_size, 'new_experiments_lowEpochs', adapter_name)
+        current_save_dir = os.path.join(adapter_base_dir, model_size, 'full_ds', adapter_name)
         if not os.path.exists(current_save_dir):
             os.makedirs(current_save_dir)
         print(f'Trained Adapter will be saved at {current_save_dir}')
@@ -97,11 +120,10 @@ def main():
         
         training_args = TrainingArguments(
             output_dir=current_save_dir, 
-            per_device_train_batch_size=4,
-            gradient_accumulation_steps=2,
-            learning_rate=5e-4,
-            #warmup_steps=50,
-            num_train_epochs=10,
+            per_device_train_batch_size=8,
+            gradient_accumulation_steps=1,
+            learning_rate=1e-3,
+            num_train_epochs=3,
             fp16=True,
             max_grad_norm=1.0,
             warmup_ratio=0.1,
@@ -110,6 +132,12 @@ def main():
             #evaluation_strategy="epoch", # CRITICAL: Enables evaluation on eval_dataset
             remove_unused_columns=False,
             label_names=["labels"],
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            save_total_limit=2,
+            load_best_model_at_end=True,
+            metric_for_best_model="wer",
+            greater_is_better=False
         )
 
         # Saving Training args
@@ -123,8 +151,9 @@ def main():
             tokenizer=tokenizer,
             data_collator=data_collator,
             train_dataset=train_ds,
-            eval_dataset=eval_ds, # CRITICAL: Include validation set here
+            eval_dataset=eval_ds,
             args=training_args,
+            compute_metrics=compute_metrics_
         )
 
         # 7. Start Training

@@ -6,4 +6,4 @@ data:
   eval_csv: "/ceph/dpandya/notsofar/nsfd_adap_segments/eval_segments.csv"
 
 adapter:
-  dir: "/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base/large/new_experiments_lowEpochs/"
+  dir: "/ceph/dpandya/notsofar/nsfd_adap_segments/adapter_base/large/"
